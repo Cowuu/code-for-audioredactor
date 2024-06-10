@@ -1,0 +1,435 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
+from pydub import AudioSegment
+import threading
+import pygame
+import tempfile
+import os
+import numpy as np
+from scipy.signal import lfilter, butter, freqz
+
+
+class SoundEditorApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("Аудиоредактор")
+        master.geometry("800x800")  # Увеличиваем размер окна
+
+
+        self.original_sound = None
+        self.sound = None
+        self.play_obj_thread = None
+
+
+        self.create_widgets()
+
+
+        pygame.mixer.init()
+
+
+    def create_widgets(self):
+        # Файлы
+        file_frame = tk.Frame(self.master)
+        file_frame.pack(pady=10)
+
+
+        self.load_button = tk.Button(file_frame, text="Загрузить аудиофайл", command=self.load_sound)
+        self.load_button.grid(row=0, column=0, padx=5)
+
+
+        self.save_button = tk.Button(file_frame, text="Сохранить аудиофайл", command=self.save_sound)
+        self.save_button.grid(row=0, column=1, padx=5)
+
+
+        self.play_original_button = tk.Button(file_frame, text="Воспроизвести оригинал", command=self.play_original_sound)
+        self.play_original_button.grid(row=0, column=2, padx=5)
+
+
+        self.play_button = tk.Button(file_frame, text="Воспроизвести аудио", command=self.play_sound)
+        self.play_button.grid(row=0, column=3, padx=5)
+
+
+        # Скорость
+        speed_frame = tk.LabelFrame(self.master, text="Изменение скорости")
+        speed_frame.pack(pady=10, padx=10, fill="x")
+
+
+        self.speed_label = tk.Label(speed_frame, text="Фактор скорости (1.0 = оригинальная):")
+        self.speed_label.grid(row=0, column=0, padx=5, pady=5)
+        self.speed_entry = tk.Entry(speed_frame)
+        self.speed_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.speed_button = tk.Button(speed_frame, text="Применить", command=self.change_speed)
+        self.speed_button.grid(row=0, column=2, padx=5, pady=5)
+
+
+        # Громкость
+        volume_frame = tk.LabelFrame(self.master, text="Изменение громкости")
+        volume_frame.pack(pady=10, padx=10, fill="x")
+
+
+        self.volume_label = tk.Label(volume_frame, text="Фактор громкости (1.0 = оригинальная):")
+        self.volume_label.grid(row=0, column=0, padx=5, pady=5)
+        self.volume_entry = tk.Entry(volume_frame)
+        self.volume_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.volume_button = tk.Button(volume_frame, text="Применить", command=self.change_volume)
+        self.volume_button.grid(row=0, column=2, padx=5, pady=5)
+
+
+        # Эхо
+        echo_frame = tk.LabelFrame(self.master, text="Эхо")
+        echo_frame.pack(pady=10, padx=10, fill="x")
+
+
+        self.echo_delay_label = tk.Label(echo_frame, text="Задержка эха (мс):")
+        self.echo_delay_label.grid(row=0, column=0, padx=5, pady=5)
+        self.echo_delay_entry = tk.Entry(echo_frame)
+        self.echo_delay_entry.grid(row=0, column=1, padx=5, pady=5)
+
+
+        self.echo_repeats_label = tk.Label(echo_frame, text="Количество повторений эха:")
+        self.echo_repeats_label.grid(row=1, column=0, padx=5, pady=5)
+        self.echo_repeats_entry = tk.Entry(echo_frame)
+        self.echo_repeats_entry.grid(row=1, column=1, padx=5, pady=5)
+
+
+        self.echo_clarity_label = tk.Label(echo_frame, text="Четкость эха (0-1):")
+        self.echo_clarity_label.grid(row=2, column=0, padx=5, pady=5)
+        self.echo_clarity_entry = tk.Entry(echo_frame)
+        self.echo_clarity_entry.grid(row=2, column=1, padx=5, pady=5)
+
+
+        self.echo_decay_label = tk.Label(echo_frame, text="Затухание эха (0-1):")
+        self.echo_decay_label.grid(row=3, column=0, padx=5, pady=5)
+        self.echo_decay_entry = tk.Entry(echo_frame)
+        self.echo_decay_entry.grid(row=3, column=1, padx=5, pady=5)
+
+
+        self.echo_button = tk.Button(echo_frame, text="Применить эхо", command=self.add_echo)
+        self.echo_button.grid(row=4, column=0, columnspan=2, pady=5)
+
+
+        # Реверберация
+        reverb_frame = tk.LabelFrame(self.master, text="Реверберация")
+        reverb_frame.pack(pady=10, padx=10, fill="x")
+
+
+        self.reverb_delay_label = tk.Label(reverb_frame, text="Задержка реверберации (мс):")
+        self.reverb_delay_label.grid(row=0, column=0, padx=5, pady=5)
+        self.reverb_delay_entry = tk.Entry(reverb_frame)
+        self.reverb_delay_entry.grid(row=0, column=1, padx=5, pady=5)
+
+
+        self.reverb_density_label = tk.Label(reverb_frame, text="Плотность реверберации:")
+        self.reverb_density_label.grid(row=1, column=0, padx=5, pady=5)
+        self.reverb_density_entry = tk.Entry(reverb_frame)
+        self.reverb_density_entry.grid(row=1, column=1, padx=5, pady=5)
+
+
+        self.reverb_clarity_label = tk.Label(reverb_frame, text="Четкость реверберации (0-1):")
+        self.reverb_clarity_label.grid(row=2, column=0, padx=5, pady=5)
+        self.reverb_clarity_entry = tk.Entry(reverb_frame)
+        self.reverb_clarity_entry.grid(row=2, column=1, padx=5, pady=5)
+
+
+        self.reverb_decay_label = tk.Label(reverb_frame, text="Затухание реверберации (0-1):")
+        self.reverb_decay_label.grid(row=3, column=0, padx=5, pady=5)
+        self.reverb_decay_entry = tk.Entry(reverb_frame)
+        self.reverb_decay_entry.grid(row=3, column=1, padx=5, pady=5)
+
+
+        self.reverb_button = tk.Button(reverb_frame, text="Применить реверберацию", command=self.add_reverb)
+        self.reverb_button.grid(row=4, column=0, columnspan=2, pady=5)
+
+
+        # Обрезание
+        trim_frame = tk.Frame(self.master)
+        trim_frame.pack(pady=10)
+
+
+        self.trim_button = tk.Button(trim_frame, text="Обрезать аудио", command=self.trim_sound)
+        self.trim_button.grid(row=0, column=0, padx=5)
+
+
+        # Эквалайзер
+        equalizer_frame = tk.LabelFrame(self.master, text="Эквалайзер")
+        equalizer_frame.pack(pady=10, padx=10, fill="x")
+
+
+        self.low_cutoff_label = tk.Label(equalizer_frame, text="Нижняя граница (Гц):")
+        self.low_cutoff_label.grid(row=0, column=0, padx=5, pady=5)
+        self.low_cutoff_entry = tk.Entry(equalizer_frame)
+        self.low_cutoff_entry.grid(row=0, column=1, padx=5, pady=5)
+
+
+        self.low_gain_label = tk.Label(equalizer_frame, text="Громкость низких частот (дБ):")
+        self.low_gain_label.grid(row=0, column=2, padx=5, pady=5)
+        self.low_gain_entry = tk.Entry(equalizer_frame)
+        self.low_gain_entry.grid(row=0, column=3, padx=5, pady=5)
+
+
+        self.mid_cutoff_label = tk.Label(equalizer_frame, text="Средняя граница (Гц):")
+        self.mid_cutoff_label.grid(row=1, column=0, padx=5, pady=5)
+        self.mid_cutoff_entry = tk.Entry(equalizer_frame)
+        self.mid_cutoff_entry.grid(row=1, column=1, padx=5, pady=5)
+
+
+        self.mid_gain_label = tk.Label(equalizer_frame, text="Громкость средних частот (дБ):")
+        self.mid_gain_label.grid(row=1, column=2, padx=5, pady=5)
+        self.mid_gain_entry = tk.Entry(equalizer_frame)
+        self.mid_gain_entry.grid(row=1, column=3, padx=5, pady=5)
+
+
+        self.high_cutoff_label = tk.Label(equalizer_frame, text="Верхняя граница (Гц):")
+        self.high_cutoff_label.grid(row=2, column=0, padx=5, pady=5)
+        self.high_cutoff_entry = tk.Entry(equalizer_frame)
+        self.high_cutoff_entry.grid(row=2, column=1, padx=5, pady=5)
+
+
+        self.high_gain_label = tk.Label(equalizer_frame, text="Громкость высоких частот (дБ):")
+        self.high_gain_label.grid(row=2, column=2, padx=5, pady=5)
+        self.high_gain_entry = tk.Entry(equalizer_frame)
+        self.high_gain_entry.grid(row=2, column=3, padx=5, pady=5)
+
+
+        self.equalizer_button = tk.Button(equalizer_frame, text="Применить эквалайзер", command=self.apply_equalizer)
+        self.equalizer_button.grid(row=3, column=0, columnspan=4, pady=5)
+
+
+    def load_sound(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            self.original_sound = AudioSegment.from_file(file_path)
+            self.sound = self.original_sound
+            print("Аудиофайл успешно загружен!")
+
+
+    def change_speed(self):
+        if self.sound:
+            try:
+                speed_factor = float(self.speed_entry.get())
+                if speed_factor <= 0:
+                    raise ValueError("Фактор скорости должен быть больше 0")
+                self.sound = self.sound._spawn(self.sound.raw_data, overrides={
+                    "frame_rate": int(self.sound.frame_rate * speed_factor)
+                }).set_frame_rate(self.sound.frame_rate)
+                print("Скорость успешно изменена!")
+            except ValueError as e:
+                print(f"Неверное значение для изменения скорости: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def change_volume(self):
+        if self.sound:
+            try:
+                volume_factor = float(self.volume_entry.get())
+                if volume_factor < 0:
+                    raise ValueError("Фактор громкости должен быть неотрицательным")
+                self.sound = self.sound + (20 * (volume_factor - 1))
+                print("Громкость успешно изменена!")
+            except ValueError as e:
+                print(f"Неверное значение для изменения громкости: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def add_echo(self):
+        if self.sound:
+            try:
+                delay_ms = int(self.echo_delay_entry.get())
+                repeats = int(self.echo_repeats_entry.get())
+                clarity = float(self.echo_clarity_entry.get())
+                decay = float(self.echo_decay_entry.get())
+                if not (0 <= clarity <= 1):
+                    raise ValueError("Четкость эха должна быть в диапазоне от 0 до 1")
+                if not (0 <= decay <= 1):
+                    raise ValueError("Затухание эха должно быть в диапазоне от 0 до 1")
+
+
+                max_delay = delay_ms * repeats * (1 + decay)
+                extended_sound = self.sound + AudioSegment.silent(duration=max_delay)
+
+
+                echo_sound = extended_sound
+                for i in range(repeats):
+                    echo = self.sound - (i * (1 - clarity) * 10)  # Уменьшаем четкость
+                    echo_sound = echo_sound.overlay(echo, position=(i + 1) * delay_ms)
+                    delay_ms = int(delay_ms * (1 + decay))  # Увеличиваем задержку
+                self.sound = echo_sound
+                print("Эхо добавлено!")
+            except ValueError as e:
+                print(f"Ошибка при добавлении эха: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def add_reverb(self):
+        if self.sound:
+            try:
+                delay_ms = int(self.reverb_delay_entry.get())
+                density = float(self.reverb_density_entry.get())
+                clarity = float(self.reverb_clarity_entry.get())
+                decay = float(self.reverb_decay_entry.get())
+                if not (0 <= clarity <= 1):
+                    raise ValueError("Четкость реверберации должна быть в диапазоне от 0 до 1")
+                if not (0 <= decay <= 1):
+                    raise ValueError("Затухание реверберации должно быть в диапазоне от 0 до 1")
+
+
+                max_delay = delay_ms * density * (1 + decay)
+                extended_sound = self.sound + AudioSegment.silent(duration=max_delay)
+
+
+                reverb = extended_sound
+                for i in range(int(density)):
+                    reverb_segment = self.sound - (i * (1 - clarity) * 10)
+                    reverb = reverb.overlay(reverb_segment, position=i * delay_ms)
+                    delay_ms = int(delay_ms * (1 + decay))  # Увеличиваем задержку
+                self.sound = reverb
+                print("Реверберация добавлена!")
+            except ValueError as e:
+                print(f"Ошибка при добавлении реверберации: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def trim_sound(self):
+        if self.sound:
+            try:
+                start_ms = simpledialog.askstring("Обрезка", "Введите начальную позицию (мс):")
+                end_ms = simpledialog.askstring("Обрезка", "Введите конечную позицию (мс):")
+                if start_ms is not None and end_ms is not None:
+                    start_ms = int(start_ms)
+                    end_ms = int(end_ms)
+                    self.sound = self.sound[start_ms:end_ms]
+                    print("Аудиофайл успешно обрезан!")
+            except ValueError as e:
+                print(f"Неверное значение для обрезки: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def play_sound(self):
+        if self.sound:
+            if self.play_obj_thread and self.play_obj_thread.is_alive():
+                self.play_obj_thread.join()
+            self.play_obj_thread = threading.Thread(target=self._play_sound)
+            self.play_obj_thread.start()
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def _play_sound(self):
+        temp_file = os.path.join(tempfile.gettempdir(), f"temp_{threading.get_ident()}.wav")
+        self.sound.export(temp_file, format="wav")
+        pygame.mixer.music.load(temp_file)
+        pygame.mixer.music.play()
+        extended_duration = len(self.sound) / 1000
+        while pygame.mixer.music.get_busy() and extended_duration > 0:
+            pygame.time.Clock().tick(10)
+            extended_duration -= 0.01
+
+
+    def play_original_sound(self):
+        if self.original_sound:
+            if self.play_obj_thread and self.play_obj_thread.is_alive():
+                self.play_obj_thread.join()
+            self.play_obj_thread = threading.Thread(target=self._play_original_sound)
+            self.play_obj_thread.start()
+        else:
+            print("Оригинальный аудиофайл не загружен!")
+
+
+    def _play_original_sound(self):
+        temp_file = os.path.join(tempfile.gettempdir(), f"original_temp_{threading.get_ident()}.wav")
+        self.original_sound.export(temp_file, format="wav")
+        pygame.mixer.music.load(temp_file)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+
+
+    def save_sound(self):
+        if self.sound:
+            file_path = filedialog.asksaveasfilename(defaultextension=".wav", filetypes=[("Wave files", "*.wav")])
+            if file_path:
+                self.sound.export(file_path, format="wav")
+                print("Аудиофайл успешно сохранен!")
+        else:
+            print("Аудиофайл не загружен!")
+
+
+    def apply_equalizer(self):
+        if self.sound:
+            try:
+                low_cutoff = float(self.low_cutoff_entry.get())
+                low_gain_db = float(self.low_gain_entry.get())
+                mid_cutoff = float(self.mid_cutoff_entry.get())
+                mid_gain_db = float(self.mid_gain_entry.get())
+                high_cutoff = float(self.high_cutoff_entry.get())
+                high_gain_db = float(self.high_gain_entry.get())
+
+
+                sample_rate = self.sound.frame_rate
+                nyquist = sample_rate / 2
+
+
+                low_cutoff_norm = low_cutoff / nyquist
+                mid_cutoff_norm = mid_cutoff / nyquist
+                high_cutoff_norm = high_cutoff / nyquist
+
+
+                if not (0 < low_cutoff_norm < 1 and 0 < mid_cutoff_norm < 1 and 0 < high_cutoff_norm < 1):
+                    raise ValueError("Границы частот должны быть больше 0 и меньше половины частоты дискретизации")
+
+
+                low_order = 2
+                mid_order = 2
+                high_order = 2
+
+
+                low_b, low_a = butter(low_order, low_cutoff_norm, btype="low", output="ba")
+                mid_b, mid_a = butter(mid_order, [low_cutoff_norm, mid_cutoff_norm], btype="band", output="ba")
+                high_b, high_a = butter(high_order, high_cutoff_norm, btype="high", output="ba")
+
+
+                samples = np.array(self.sound.get_array_of_samples(), dtype=np.float32)
+                low_filtered = lfilter(low_b, low_a, samples)
+                mid_filtered = lfilter(mid_b, mid_a, samples)
+                high_filtered = lfilter(high_b, high_a, samples)
+
+
+                low_filtered *= 10 ** (low_gain_db / 20)
+                mid_filtered *= 10 ** (mid_gain_db / 20)
+                high_filtered *= 10 ** (high_gain_db / 20)
+
+
+                equalized_samples = low_filtered + mid_filtered + high_filtered
+
+
+                if np.max(np.abs(equalized_samples)) > 1:
+                    equalized_samples = equalized_samples / np.max(np.abs(equalized_samples))
+
+
+                equalized_samples = (equalized_samples * 32767).astype(np.int16)
+                self.sound = AudioSegment(equalized_samples.tobytes(), frame_rate=sample_rate, sample_width=2, channels=1)
+
+
+                print("Эквалайзер успешно применен!")
+            except ValueError as e:
+                print(f"Неверное значение для эквалайзера: {e}")
+        else:
+            print("Аудиофайл не загружен!")
+   
+
+
+
+
+def main():
+    root = tk.Tk()
+    app = SoundEditorApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
